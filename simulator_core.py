@@ -1,6 +1,6 @@
-from typing import List
+from typing import List, Optional
 from itertools import combinations
-import csv
+from collections import defaultdict
 
 class Warrior:
     def __init__(self, nation: str, name: str, category: str, skill1: str, skill2: str, trigger: str, combo: str):
@@ -47,7 +47,7 @@ class ComboSimulator:
             for w in self.warriors:
                 if w.name in used_combo:
                     continue
-                if w.trigger == state and w.combo.strip() and w.combo != "상태변환없음" and w.combo != "終了":
+                if w.trigger == state and w.combo.strip() and w.combo not in ["상태변환없음", "終了"]:
                     new_seq = seq + [f"{w.name} 콤보({w.combo})"]
                     triggered = True
                     recurse(w.combo, used_skill, used_combo | {w.name}, new_seq)
@@ -73,11 +73,6 @@ class ComboSimulator:
                 alt_seq = base_seq + [f"{w.name} 콤보({w.combo})"]
                 recurse(w.combo, used_skill, {w.name}, alt_seq)
 
-        # 콤보 없음
-        if not any(w.trigger == state and w.combo.strip() and w.combo not in ["상태변환없음", "終了"] for w in self.warriors):
-            # 콤보 없이 기술만 사용된 경우는 제외 (출력 안 함)
-            pass
-
     def get_results(self):
         return self.results
 
@@ -99,41 +94,109 @@ def load_warriors_from_csv(filepath: str) -> List[Warrior]:
                 ))
     return warriors
 
-def run_combo_simulation(warriors: List[Warrior]):
-    """선택된 장수들로 가능한 4인 팀 조합을 모두 시뮬레이션"""
+def run_combo_simulation(warriors: List[Warrior], same_nation_option: bool = False, fixed_members: Optional[List[str]] = None):
     all_results = []
-    combis = list(combinations(warriors, 4))
-    for idx, team in enumerate(combis, 1):
-        sim = ComboSimulator(list(team))
-        sim.simulate_all()
-        results = sim.get_results()
-        if results:
-            combo_counts = [r["전체 기술 시퀀스"].count("콤보(") for r in results]
-            all_results.append({
-                "team_no": idx,
-                "team_names": [w.name for w in team],
-                "results": results,
-                "case_count": len(combo_counts),
-                "combo0": combo_counts.count(0),
-                "combo1": combo_counts.count(1),
-                "combo2": combo_counts.count(2),
-                "combo3": combo_counts.count(3),
-                "combo4": combo_counts.count(4)
-            })
+    seen_teams = set()
+    name_to_warrior = {w.name: w for w in warriors}
 
-    # 총 발생수 → 콤보4 → 콤보3 기준 정렬하여 상위 15개
-    top_teams = sorted(
-        all_results,
-        key=lambda x: (x["case_count"], x["combo4"], x["combo3"]),
-        reverse=True
-    )[:15]
+    def is_same_nation_3_plus_1(team):
+        nation_counts = defaultdict(int)
+        for w in team:
+            nation_counts[w.nation] += 1
+        return any(count >= 3 for count in nation_counts.values())
 
-    # 콤보4 수 기준 상위 5개
-    top_4combo_teams = sorted(
-        all_results,
-        key=lambda x: (x["combo4"], x["case_count"], x["combo3"]),
-        reverse=True
-    )[:5]
+    if fixed_members:
+        fixed_warriors = [name_to_warrior[name] for name in fixed_members]
+        candidates = [w for w in warriors if w.name not in fixed_members]
+        num_needed = 4 - len(fixed_warriors)
+
+        if num_needed < 1:
+            team = fixed_warriors[:4]
+            if not same_nation_option or is_same_nation_3_plus_1(team):
+                sim = ComboSimulator(team)
+                sim.simulate_all()
+                results = sim.get_results()
+                if results:
+                    combo_counts = [r["전체 기술 시퀀스"].count("콤보(") for r in results]
+                    all_results.append({
+                        "team_no": 1,
+                        "team_names": [w.name for w in team],
+                        "results": results,
+                        "case_count": len(combo_counts),
+                        "combo0": combo_counts.count(0),
+                        "combo1": combo_counts.count(1),
+                        "combo2": combo_counts.count(2),
+                        "combo3": combo_counts.count(3),
+                        "combo4": combo_counts.count(4)
+                    })
+        else:
+            for extra in combinations(candidates, num_needed):
+                team = fixed_warriors + list(extra)
+                if same_nation_option and not is_same_nation_3_plus_1(team):
+                    continue
+                sorted_names = tuple(sorted(w.name for w in team))
+                if sorted_names in seen_teams:
+                    continue
+                seen_teams.add(sorted_names)
+                sim = ComboSimulator(team)
+                sim.simulate_all()
+                results = sim.get_results()
+                if results:
+                    combo_counts = [r["전체 기술 시퀀스"].count("콤보(") for r in results]
+                    all_results.append({
+                        "team_no": len(all_results)+1,
+                        "team_names": [w.name for w in team],
+                        "results": results,
+                        "case_count": len(combo_counts),
+                        "combo0": combo_counts.count(0),
+                        "combo1": combo_counts.count(1),
+                        "combo2": combo_counts.count(2),
+                        "combo3": combo_counts.count(3),
+                        "combo4": combo_counts.count(4)
+                    })
+
+    else:
+        if not same_nation_option:
+            combis = list(combinations(warriors, 4))
+        else:
+            by_nation = defaultdict(list)
+            for w in warriors:
+                by_nation[w.nation].append(w)
+
+            combis = []
+            for nation, same_nation_warriors in by_nation.items():
+                if len(same_nation_warriors) < 3:
+                    continue
+                for same3 in combinations(same_nation_warriors, 3):
+                    others = [w for w in warriors if w not in same3]
+                    for other1 in others:
+                        team = list(same3) + [other1]
+                        sorted_names = tuple(sorted(w.name for w in team))
+                        if sorted_names in seen_teams:
+                            continue
+                        seen_teams.add(sorted_names)
+                        combis.append(team)
+
+        for idx, team in enumerate(combis, 1):
+            sim = ComboSimulator(list(team))
+            sim.simulate_all()
+            results = sim.get_results()
+            if results:
+                combo_counts = [r["전체 기술 시퀀스"].count("콤보(") for r in results]
+                all_results.append({
+                    "team_no": idx,
+                    "team_names": [w.name for w in team],
+                    "results": results,
+                    "case_count": len(combo_counts),
+                    "combo0": combo_counts.count(0),
+                    "combo1": combo_counts.count(1),
+                    "combo2": combo_counts.count(2),
+                    "combo3": combo_counts.count(3),
+                    "combo4": combo_counts.count(4)
+                })
+
+    top_teams = sorted(all_results, key=lambda x: (x["case_count"], x["combo4"], x["combo3"]), reverse=True)[:15]
+    top_4combo_teams = sorted(all_results, key=lambda x: (x["combo4"], x["case_count"], x["combo3"]), reverse=True)[:5]
 
     return {
         "top_teams": top_teams,

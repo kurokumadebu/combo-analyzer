@@ -10,44 +10,117 @@ st.title("⚔️ バリバリコンボ分析")
 # CSV에서 장수 목록 불러오기
 warriors = load_warriors_from_csv("warriors.csv")
 warrior_dict = {w.name: w for w in warriors}
-warrior_by_nation = defaultdict(list)
+
+# 명장 우선, 국가 순 정렬
+def sort_warriors(wlist):
+    return sorted(wlist, key=lambda w: ("01" if w.category == "名将" else "02", w.name))
+
+sorted_warriors = defaultdict(list)
 for w in warriors:
-    warrior_by_nation[w.nation].append(w)
+    sorted_warriors[w.nation].append(w)
+for nation in sorted_warriors:
+    sorted_warriors[nation] = sort_warriors(sorted_warriors[nation])
 
-# ✅ 장수 선택 UI
-st.subheader("🧙 武将を選択してください（4人以上）")
-selected_names = []
-for nation in sorted(warrior_by_nation.keys()):
-    st.markdown(f"**■ {nation}**")
-    cols = st.columns(3)
-    for idx, warrior in enumerate(warrior_by_nation[nation]):
-        col = cols[idx % 3]
-        if warrior.category == "名将":
-            label = f"🔴 名将 {warrior.name}"
-        else:
-            label = warrior.name
-        if col.checkbox(label, key=f"chk_{warrior.name}"):
-            selected_names.append(warrior.name)
+# 1단계: 고정 장수 선택
+st.subheader("Step 1. 固定武装の選択(オプション)") # 제목 수정
+st.markdown("""
+特定の武装を固定で指定したい場合、最大3人まで指定することができます。
+一人も指定しない場合、すべての組み合わせで分析します。
+""") # 설명 추가
 
-if len(selected_names) < 4:
-    st.info("将軍を最低4人以上選んでください。")
+def format_label(w):
+    label = f"名将 {w.name}" if w.category == "名将" else w.name
+    return label
 
-st.markdown("---")
+all_sorted = []
+for nation in ["蜀", "魏", "呉", "群", "野"]:
+    all_sorted.extend(sorted_warriors[nation])
 
-# ✅ 분석 버튼
-if len(selected_names) >= 4:
-    if st.button("🔍 探せ！"):
-        selected_warriors = [warrior_dict[name] for name in selected_names]
-        sim_data = run_combo_simulation(selected_warriors)
-        st.session_state["top_teams"] = sim_data["top_teams"]
-        st.session_state["top_4combo_teams"] = sim_data["top_4combo_teams"]
+label_options = [format_label(w) for w in all_sorted]
+name_options = [w.name for w in all_sorted]
+
+col1, col2, col3 = st.columns(3)
+fixed1 = col1.selectbox("固定武将1", [""] + name_options, format_func=lambda n: "" if n == "" else format_label(warrior_dict[n]))
+fixed2 = col2.selectbox("固定武将2", [""] + name_options, format_func=lambda n: "" if n == "" else format_label(warrior_dict[n]))
+fixed3 = col3.selectbox("固定武将3", [""] + name_options, format_func=lambda n: "" if n == "" else format_label(warrior_dict[n]))
+
+fixed_selected = [n for n in [fixed1, fixed2, fixed3] if n]
+
+if st.button("次へ"):
+    if len(set(fixed_selected)) != len(fixed_selected):
+        st.error("⚠️ 同じ武将を複数固定できません。")
+    else:
+        st.session_state["fixed_members"] = fixed_selected
+        st.session_state["go_next"] = True
+        # Step2 선택 초기화 및 상세 표시 초기화
+        st.session_state["selected_members_step2"] = []
+        st.session_state["top_teams"] = []
+        st.session_state["top_4combo_teams"] = []
         st.session_state["detailed_index"] = None
 
-# ✅ 팀 요약 출력
+# 2단계: 나머지 장수 선택
+if st.session_state.get("go_next"):
+    st.subheader("Step 2. 武将の選択") # 제목 수정
+    st.markdown("武装は固定武装を含め、最低4人以上を指定してください。") # 설명 수정
+
+    selected_names = st.session_state.get("selected_members_step2", [])
+
+    for nation in ["蜀", "魏", "呉", "群", "野"]:
+        st.markdown(f"**■ {nation}**")
+        cols = st.columns(3)
+        for idx, warrior in enumerate(sorted_warriors[nation]):
+            col = cols[idx % 3]
+            disabled = warrior.name in st.session_state["fixed_members"]
+            label = f"{'名将 ' if warrior.category == '名将' else ''}{warrior.name}"
+            if disabled:
+                col.checkbox(label + " (固定)", key=f"chk_{warrior.name}", value=True, disabled=True)
+            else:
+                checked = warrior.name in selected_names
+                val = col.checkbox(label, key=f"chk_{warrior.name}", value=checked)
+                # 선택값 업데이트 (실시간 반영)
+                if val and warrior.name not in selected_names:
+                    selected_names.append(warrior.name)
+                elif not val and warrior.name in selected_names:
+                    selected_names.remove(warrior.name)
+
+    # 선택 상태를 세션에 저장
+    st.session_state["selected_members_step2"] = selected_names
+
+    total_selected = len(selected_names) + len(st.session_state["fixed_members"])
+    if total_selected < 4:
+        st.info("将軍を最低4人以上選んでください。")
+    else:
+        st.subheader("Step 3. 合体技の指定") # 새 타이틀 추가
+        same_nation_option = st.checkbox("🧩 同一国3人 + 別国1人の組合せ限定", value=False) # 체크박스 명칭 수정
+
+        # 같은 국가 3명 이상 검사 (고정 + 선택 합산)
+        if same_nation_option:
+            nation_counts = defaultdict(int)
+            for n in st.session_state["fixed_members"] + selected_names:
+                nation = warrior_dict[n].nation
+                nation_counts[nation] += 1
+            if all(count < 3 for count in nation_counts.values()):
+                st.error("⚠️ 同一国家の武将が3人以上必要です。")
+            else:
+                if st.button("🔍 探せ！"):
+                    all_selected = st.session_state["fixed_members"] + selected_names
+                    selected_warriors = [warrior_dict[n] for n in all_selected]
+                    sim_data = run_combo_simulation(selected_warriors, same_nation_option=same_nation_option, fixed_members=st.session_state["fixed_members"])
+                    st.session_state["top_teams"] = sim_data["top_teams"]
+                    st.session_state["top_4combo_teams"] = sim_data["top_4combo_teams"]
+                    st.session_state["detailed_index"] = None
+        else:
+            if st.button("🔍 探せ！"):
+                all_selected = st.session_state["fixed_members"] + selected_names
+                selected_warriors = [warrior_dict[n] for n in all_selected]
+                sim_data = run_combo_simulation(selected_warriors, same_nation_option=same_nation_option, fixed_members=st.session_state["fixed_members"])
+                st.session_state["top_teams"] = sim_data["top_teams"]
+                st.session_state["top_4combo_teams"] = sim_data["top_4combo_teams"]
+                st.session_state["detailed_index"] = None
+
+# 팀 요약 출력 함수
 def render_team_summary(title, teams, key_prefix):
     st.subheader(f"📋 {title}")
-
-    # ✅ 헤더 출력
     header_cols = st.columns([0.6, 2.5, 1.0, 0.9, 0.9, 0.9, 0.9, 1.4])
     header_cols[0].markdown("**No.**")
     header_cols[1].markdown("**編成**")
@@ -77,30 +150,32 @@ def render_team_summary(title, teams, key_prefix):
             if st.button("詳細内容", key=f"{key_prefix}_detail_btn_{team_no}"):
                 st.session_state["detailed_index"] = team_no
 
-        st.markdown("<hr style='margin:4px 0;'>", unsafe_allow_html=True)  # 각 행 구분선
+        st.markdown("<hr style='margin:4px 0;'>", unsafe_allow_html=True)
 
-# 🔹 출력: 추천 상위 15개 팀
-if "top_teams" in st.session_state:
+if "top_teams" in st.session_state and st.session_state["top_teams"]:
     render_team_summary("おすすめ上位15組", st.session_state["top_teams"], "top")
 
-# 🔹 출력: 콤보4 상위 5개 팀
-if "top_4combo_teams" in st.session_state:
+if "top_4combo_teams" in st.session_state and st.session_state["top_4combo_teams"]:
     render_team_summary("連続コンボが多い上位５組", st.session_state["top_4combo_teams"], "combo4")
 
-# ✅ 상세 콤보 시퀀스 출력
+# 상세 콤보 시퀀스
 if st.session_state.get("detailed_index") is not None:
-    all_teams = st.session_state["top_teams"] + st.session_state["top_4combo_teams"]
+    all_teams = st.session_state.get("top_teams", []) + st.session_state.get("top_4combo_teams", [])
     selected_team = next((t for t in all_teams if t["team_no"] == st.session_state["detailed_index"]), None)
     if selected_team:
         st.markdown("---")
         styled_names = " ".join([
-            f"<span style='background-color:#eee;color:black;padding:2px 8px;border-radius:4px;margin-right:4px;'>"
-            f"{'<span style=\"background-color:#d33;color:white;padding:1px 4px;border-radius:2px;margin-right:4px;font-size:10px\">名将</span> ' if warrior_dict[name].category == '名将' else ''}{name}</span>"
+            (
+                "<span style='background-color:#eee;color:black;padding:2px 8px;border-radius:4px;margin-right:4px;'>"
+                "<span style='background-color:#d33;color:white;padding:1px 4px;border-radius:2px;margin-right:4px;font-size:10px'>名将</span> "
+                f"{name}</span>"
+                if warrior_dict[name].category == "名将" else
+                f"<span style='background-color:#eee;color:black;padding:2px 8px;border-radius:4px;margin-right:4px;'>{name}</span>"
+            )
             for name in selected_team["team_names"]
         ])
         st.markdown(f"📋 {selected_team['team_no']} コンボ構成: {styled_names}", unsafe_allow_html=True)
 
-        # 테이블 데이터 구성
         table_data = []
         for row in selected_team["results"]:
             sequence = row["전체 기술 시퀀스"]
@@ -110,21 +185,13 @@ if st.session_state.get("detailed_index") is not None:
                 match = re.match(r"(.+?) (기술1|기술2|콤보)\((.*?)\)", step)
                 if match:
                     name, skill_type, effect = match.group(1), match.group(2), match.group(3)
-                    prefix = ""
-                    if skill_type == "기술1":
-                        prefix = "怒り: "
-                    elif skill_type == "기술2":
-                        prefix = "普通: "
-                    if effect.strip() == "":
-                        return f"{name}\n({prefix}状態変更なし)"
-                    else:
-                        return f"{name}\n({prefix}{effect})"
+                    prefix = "怒り: " if skill_type == "기술1" else "普通: " if skill_type == "技術2" else ""
+                    return f"{name}\n({prefix}{effect if effect else '状態変更なし'})"
                 return step
 
             발동 = format_step(parts[0]) if parts else ""
             콤보 = [format_step(p) for p in parts[1:]] if len(parts) > 1 else []
-            row_data = [발동]
-            row_data.extend(콤보 + [""] * (4 - len(콤보)))
+            row_data = [발동] + 콤보 + [""] * (4 - len(콤보))
             table_data.append(row_data)
 
         df = pd.DataFrame(table_data, columns=["攻撃技", "コンボ 1", "コンボ 2", "コンボ 3", "コンボ 4"])
@@ -135,7 +202,7 @@ if st.session_state.get("detailed_index") is not None:
                 **{"white-space": "pre-wrap"}
             ).set_table_styles([
                 {"selector": "th, td", "props": [("border", "1px solid #ccc"), ("padding", "6px")]},
-                {"selector": "th", "props": [("background-color", "#f0f0f0")]}
+                {"selector": "th", "props": [("background-color", "#f0f0f0")]},
             ]),
             use_container_width=True
         )
