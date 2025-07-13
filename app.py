@@ -22,7 +22,7 @@ for nation in sorted_warriors:
     sorted_warriors[nation] = sort_warriors(sorted_warriors[nation])
 
 # 1단계: 고정 장수 선택
-st.subheader("Step 1. 固定武装の選択(オプション)")
+st.subheader("Step 1. 固定武将の選択(オプション)")
 st.markdown("""
 特定の武将を固定したい場合は、最大3人まで指定可能です。
 指定しない場合は、全ての組み合わせを対象に分析します。
